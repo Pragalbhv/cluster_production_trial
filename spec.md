@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This production code implements a comprehensive analysis pipeline for Pu-Cl cluster systems using Voronoi tessellation from OVITO. The system performs weighted coordination analysis, shared-anion network construction, oligomer characterization, and temporal stability analysis.
+This production code implements a comprehensive analysis pipeline for Pu-Cl cluster systems using Voronoi tessellation from OVITO. The system performs weighted coordination analysis, shared-anion network construction, oligomer characterization, and temporal stability analysis. We shpould be able to specify cation = 'Ce'/'Pu'. For now we will assume that we have specified cation as 'Pu'
 
 ## Core Objectives
 
@@ -24,8 +24,9 @@ This production code implements a comprehensive analysis pipeline for Pu-Cl clus
 ```
 cluster_production_trial/
 ├── spec.md                    # This specification document
-├── production_utils.py        # Core utility functions
-├── production_analysis.ipynb  # Interactive analysis notebook
+├── utils.py                   # utility functions - functions that are used in notebook and are implemented/inspired in cluster_analysis
+├── plots.py                  #has plotting utilities
+├── cluster_analysis.ipynb  # Interactive analysis notebook
 ├── filesystem_changes.log     # Log of all file system changes
 └── .gitignore                # Git ignore patterns
 ```
