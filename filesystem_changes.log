@@ -25,3 +25,6 @@
 [2025-11-05 19:30:34] MODIFY cluster_analysis.ipynb [simplified: removed analysis, kept only operations]
 [2025-11-05 19:35:40] MODIFY utils.py [fixed face area extraction: now extracts from SurfaceMesh voronoi-polyhedra]
 [2025-11-05 19:45:45] MODIFY utils.py [added generate_polyhedra=True to VoronoiAnalysisModifier to enable face area extraction from surface mesh]
+[2025-11-06 04:09:25] MODIFY utils.py [Phase 3 Enhanced: Added compute_topological_coordination(), enhanced build_coordination_histograms() with coordination_type parameter, updated compute_weighted_coordination_analysis() to include topological coordination]
+[2025-11-06 04:09:25] MODIFY plots.py [Phase 3 Enhanced: Enhanced plot_coordination_histograms() and plot_weighted_coordination_comparison() with statistics display (mean±std, median) and flexible coordination type switching]
+[2025-11-06 04:09:25] MODIFY cluster_analysis.ipynb [Phase 3 Enhanced: Added cells demonstrating coordination type switching (topological/area/solid_angle), statistics display on plots, and multiple comparison scatter plots]
