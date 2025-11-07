@@ -350,6 +350,7 @@ def plot_3d_cluster_component(
     show_na_context: bool = True,
     show_edges: bool = True,
     scale_edge_width_by_area: bool = True,
+    rotate_3d: bool = False,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
 ) -> None:
@@ -410,7 +411,10 @@ def plot_3d_cluster_component(
     setup_plot_style()
     
     # Enable 3D rotation
-    plt.rcParams["axes3d.mouserotationstyle"] = "trackball"
+    if rotate_3d:
+        plt.rcParams["axes3d.mouserotationstyle"] = "trackball"
+    else:
+        pass # Do nothing
     
     # Create figure with single 3D axes
     fig = plt.figure(figsize=PLOT_CONFIG['figure_size_3d'])
@@ -539,6 +543,248 @@ def plot_3d_cluster_component(
     # Set title
     if title is None:
         title = f"{cation}-{anion} Cluster {cluster_id}\n"
+        title += f"({cation}: {len(cation_positions)}, {anion}: {len(anion_positions)}, "
+        title += f"Edges: {cluster_subgraph.number_of_edges()})"
+    
+    ax.set_title(title, fontsize=PLOT_CONFIG['font_size_title'], fontweight='bold')
+    ax.set_xlabel("X (Å)", fontsize=PLOT_CONFIG['font_size_labels'])
+    ax.set_ylabel("Y (Å)", fontsize=PLOT_CONFIG['font_size_labels'])
+    ax.set_zlabel("Z (Å)", fontsize=PLOT_CONFIG['font_size_labels'])
+    ax.legend(fontsize=PLOT_CONFIG['font_size_legend'])
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=PLOT_CONFIG['dpi'], bbox_inches='tight')
+    
+    plt.show()
+
+
+def plot_unwrapped_3d_cluster_component(
+    graph: Any,
+    cluster_ids: np.ndarray,
+    cluster_id: int,
+    positions: np.ndarray,
+    species: np.ndarray,
+    cell_matrix: np.ndarray,
+    cation: str = 'Pu',
+    anion: str = 'Cl',
+    show_na_context: bool = True,
+    show_edges: bool = True,
+    scale_edge_width_by_area: bool = True,
+    rotate_3d: bool = False,
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Plot a specific cluster component in 3D with unwrapped coordinates to prevent edges from spanning periodic boundaries.
+    
+    This function is similar to plot_3d_cluster_component() but uses coordinate unwrapping to ensure
+    that edges between atoms in the cluster do not appear to "jump" across periodic boundaries.
+    The unwrapping is performed using fractional coordinates and graph traversal to assign
+    consistent integer lattice shifts to each node.
+    
+    Args:
+        graph: networkx Graph from build_shared_anion_graph_from_voronoi
+        cluster_ids: (N,) array of cluster IDs (-1 for unclustered)
+        cluster_id: Specific cluster ID to plot (must be >= 0)
+        positions: (N, 3) array of wrapped atom positions
+        species: (N,) array of species names/identifiers
+        cell_matrix: (3, 4) or (3, 3) cell matrix from OVITO (required)
+            - If (3, 4): first 3 columns are lattice vectors, 4th is origin offset
+            - If (3, 3): columns are lattice vectors
+        cation: Cation species (default: 'Pu', can be 'Ce' or other)
+        anion: Anion species (default: 'Cl')
+        show_na_context: Whether to show Na atoms as background context (default: True)
+            Note: Na atoms are shown with wrapped coordinates
+        show_edges: Whether to draw edges between atoms (default: True)
+        scale_edge_width_by_area: Whether to scale edge width by Voronoi face area (default: True).
+            If False, all edges use uniform width of 1.5.
+        title: Optional custom title (default: None, auto-generated)
+        save_path: Optional path to save figure (default: None)
+    
+    Raises:
+        ImportError: If networkx is not available
+        ValueError: If cluster_id is invalid or cluster not found
+    
+    Examples:
+        >>> plot_unwrapped_3d_cluster_component(
+        ...     graph, cluster_ids, cluster_id=0,
+        ...     positions, species, cell_matrix, cation='Pu', anion='Cl'
+        ... )
+    """
+    if not NETWORKX_AVAILABLE:
+        raise ImportError("networkx is required for plot_unwrapped_3d_cluster_component")
+    
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    from utils import unwrap_component
+    
+    if cluster_id < 0:
+        raise ValueError(f"cluster_id must be >= 0, got {cluster_id}")
+    
+    # Find atoms in the specified cluster
+    cluster_mask = (cluster_ids == cluster_id)
+    cluster_atom_indices = np.where(cluster_mask)[0]
+    
+    if len(cluster_atom_indices) == 0:
+        raise ValueError(f"Cluster {cluster_id} not found or empty")
+    
+    # Get subgraph for this cluster
+    cluster_nodes = [int(idx) for idx in cluster_atom_indices if idx in graph.nodes()]
+    if len(cluster_nodes) == 0:
+        raise ValueError(f"No nodes from cluster {cluster_id} found in graph")
+    
+    cluster_subgraph = graph.subgraph(cluster_nodes)
+    
+    # Unwrap coordinates for the cluster component
+    R_unwrapped, index_of = unwrap_component(
+        positions=positions,
+        cell_matrix=cell_matrix,
+        graph=graph,
+        component_nodes=cluster_nodes,
+        species=species,
+        cation=cation,
+    )
+    
+    # Setup plot style
+    setup_plot_style()
+    
+    # Enable 3D rotation
+    if rotate_3d:
+        plt.rcParams["axes3d.mouserotationstyle"] = "trackball"
+    else:
+        pass # Do nothing
+    
+    # Create figure with single 3D axes
+    fig = plt.figure(figsize=PLOT_CONFIG['figure_size_3d'])
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Plot Na context if requested (using wrapped coordinates)
+    if show_na_context:
+        na_mask = (species == 'Na')
+        if np.any(na_mask):
+            ax.scatter(
+                positions[na_mask, 0],
+                positions[na_mask, 1],
+                positions[na_mask, 2],
+                c=COLORS['species']['Na'],
+                s=20,
+                alpha=PLOT_CONFIG['alpha_background'],
+                label='Na (context)',
+            )
+    
+    # Separate atoms by species in cluster and use unwrapped positions
+    cation_positions = []
+    anion_positions = []
+    cation_indices = []
+    anion_indices = []
+    
+    for node in cluster_subgraph.nodes():
+        if node in index_of:
+            idx = index_of[node]
+            pos = R_unwrapped[idx]
+            if pos.shape[0] == 3:
+                if species[node] == cation:
+                    cation_positions.append(pos)
+                    cation_indices.append(node)
+                elif species[node] == anion:
+                    anion_positions.append(pos)
+                    anion_indices.append(node)
+    
+    # Plot cation atoms with unwrapped positions
+    if len(cation_positions) > 0:
+        cation_positions = np.vstack(cation_positions)
+        cation_color = COLORS['species'].get(cation, COLORS['species']['Pu'])
+        ax.scatter(
+            cation_positions[:, 0],
+            cation_positions[:, 1],
+            cation_positions[:, 2],
+            c=cation_color,
+            s=100,
+            alpha=PLOT_CONFIG['alpha_main'],
+            label=f'{cation} (n={len(cation_positions)})',
+            edgecolors='darkred',
+            linewidth=0.5,
+        )
+    
+    # Plot anion atoms with unwrapped positions
+    if len(anion_positions) > 0:
+        anion_positions = np.vstack(anion_positions)
+        ax.scatter(
+            anion_positions[:, 0],
+            anion_positions[:, 1],
+            anion_positions[:, 2],
+            c=COLORS['species'][anion],
+            s=80,
+            alpha=PLOT_CONFIG['alpha_main'],
+            label=f'{anion} (n={len(anion_positions)})',
+            edgecolors='darkgreen',
+            linewidth=0.5,
+        )
+    
+    # Plot edges if requested (using unwrapped positions)
+    if show_edges and cluster_subgraph.number_of_edges() > 0:
+        # Calculate edge widths based on area scaling if enabled
+        if scale_edge_width_by_area:
+            # Get edge areas for line width scaling
+            areas = [edata.get("area", 1.0) for _, _, edata in cluster_subgraph.edges(data=True)]
+            if len(areas) > 0:
+                a_min = float(np.min(areas))
+                a_max = float(np.max(areas))
+            else:
+                a_min = a_max = 1.0
+            
+            # Helper function for line width from area
+            def lw_from_area(a: float, a0: float, a1: float) -> float:
+                if a1 <= a0:
+                    return 1.0
+                t = (float(a) - a0) / (a1 - a0)
+                return 0.6 + 2.4 * max(0.0, min(1.0, t))
+        else:
+            # Use uniform width for all edges
+            uniform_width = 1.5
+        
+        # Draw edges using unwrapped positions
+        for u, v, edata in cluster_subgraph.edges(data=True):
+            if u in index_of and v in index_of:
+                idx_u = index_of[u]
+                idx_v = index_of[v]
+                p1 = R_unwrapped[idx_u]
+                p2 = R_unwrapped[idx_v]
+                if p1.shape[0] == 3 and p2.shape[0] == 3:
+                    # Determine line width
+                    if scale_edge_width_by_area:
+                        area = edata.get("area", 1.0)
+                        lw = lw_from_area(area, a_min, a_max)
+                    else:
+                        lw = uniform_width
+                    
+                    # Color edge based on species pair
+                    u_species = species[u] if u < len(species) else 'unknown'
+                    v_species = species[v] if v < len(species) else 'unknown'
+                    
+                    if (u_species == cation and v_species == anion) or \
+                       (u_species == anion and v_species == cation):
+                        edge_color = 'purple'  # Cation-anion edge
+                    elif u_species == cation and v_species == cation:
+                        edge_color = 'darkred'  # Cation-cation edge
+                    elif u_species == anion and v_species == anion:
+                        edge_color = 'darkgreen'  # Anion-anion edge
+                    else:
+                        edge_color = 'gray'
+                    
+                    ax.plot(
+                        [p1[0], p2[0]],
+                        [p1[1], p2[1]],
+                        [p1[2], p2[2]],
+                        color=edge_color,
+                        alpha=0.7,
+                        linewidth=lw,
+                    )
+    
+    # Set title
+    if title is None:
+        title = f"{cation}-{anion} Cluster {cluster_id} (Unwrapped)\n"
         title += f"({cation}: {len(cation_positions)}, {anion}: {len(anion_positions)}, "
         title += f"Edges: {cluster_subgraph.number_of_edges()})"
     

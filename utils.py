@@ -10,7 +10,8 @@ Functions are implemented/inspired by cluster_analysis modules.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any, Dict, Tuple
+from typing import Optional, Any, Dict, Tuple, List
+from collections import deque
 
 import numpy as np
 
@@ -1297,3 +1298,124 @@ def assign_cluster_ids_from_graph(
     cluster_sizes = np.array([len(comp) for comp in sorted_components], dtype=int)
     
     return cluster_ids, cluster_sizes
+
+
+# ============================================================================
+# Coordinate Unwrapping for Periodic Boundary Conditions
+# ============================================================================
+
+def unwrap_component(
+    positions: np.ndarray,
+    cell_matrix: np.ndarray,
+    graph: Any,
+    component_nodes: List[int],
+    root: Optional[int] = None,
+    species: Optional[np.ndarray] = None,
+    cation: str = "Pu",
+    tol: float = 1e-8,
+    return_nodes: bool = False,
+) -> Tuple[np.ndarray, Dict[int, int]]:
+    """
+    Unwrap a connected component by propagating per-axis integer shifts so that
+    bonded neighbors differ by at most ±0.5 in fractional space.
+
+    Args:
+        positions: (N, 3) wrapped Cartesian coordinates.
+        cell_matrix: Simulation cell matrix in OVITO format ((3,3) or (3,4)).
+        graph: networkx graph describing connectivity.
+        component_nodes: Nodes of the connected component to unwrap.
+        root: Optional starting node. If omitted, uses the smallest node index,
+              preferring a cation when species information is available.
+        species: Optional species array used to prefer the cation as root.
+        cation: Species string to prioritize when choosing the root.
+        tol: Cycle-consistency tolerance.
+        return_nodes: When True, also return the ordered node list.
+
+    Returns:
+        (R_unwrapped, index_of) or (R_unwrapped, index_of, nodes) when
+        ``return_nodes`` is True.
+    """
+    try:
+        import networkx as nx  # noqa: F401
+    except Exception as exc:  # pragma: no cover - import error surfaced directly
+        raise ImportError("networkx is required for unwrap_component") from exc
+
+    positions = np.asarray(positions, dtype=float)
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError(f"positions must be shape (N,3), got {positions.shape}")
+
+    cell_matrix = np.asarray(cell_matrix, dtype=float)
+    if cell_matrix.shape == (3, 4):
+        H = cell_matrix[:, :3]
+        origin = cell_matrix[:, 3]
+    elif cell_matrix.shape == (3, 3):
+        H = cell_matrix
+        origin = np.zeros(3, dtype=float)
+    else:
+        raise ValueError(f"cell_matrix must be (3,3) or (3,4); got {cell_matrix.shape}")
+
+    # Fractional coordinates: solve H.T * f = r - origin
+    rhs = positions - origin
+    f = np.linalg.solve(H.T, rhs.T).T
+    f = np.mod(f, 1.0)
+
+    comp = set(component_nodes)
+    if not comp:
+        empty = (np.empty((0, 3), float), {})
+        if return_nodes:
+            return empty[0], empty[1], []
+        return empty
+
+    comp_list = sorted(comp)
+    if root is None:
+        root = comp_list[0]
+        if species is not None and len(species) > 0:
+            cation_nodes = [n for n in comp_list if n < len(species) and str(species[n]) == cation]
+            if cation_nodes:
+                root = cation_nodes[0]
+    elif root not in comp:
+        raise ValueError(f"root node {root} not in component_nodes")
+
+    shifts: Dict[int, Optional[np.ndarray]] = {n: None for n in comp}
+    shifts[root] = np.zeros(3, dtype=int)
+
+    queue = deque([root])
+
+    while queue:
+        i = queue.popleft()
+        fi = f[i]
+
+        for j in graph.neighbors(i):
+            if j not in comp:
+                continue
+
+            df = f[j] - fi
+            step = np.zeros(3, dtype=int)
+            step[df > 0.5] -= 1
+            step[df < -0.5] += 1
+
+            predicted = shifts[i] + step
+
+            if shifts[j] is None:
+                shifts[j] = predicted
+                queue.append(j)
+            else:
+                if np.any(np.abs(shifts[j] - predicted) > tol):
+                    raise RuntimeError(
+                        f"Inconsistent lattice shift on edge ({i},{j}). "
+                        f"existing={shifts[j]}, predicted={predicted}, df={df}"
+                    )
+
+    dangling = [n for n, val in shifts.items() if val is None]
+    if dangling:
+        raise RuntimeError(f"Unassigned shift(s) for nodes: {dangling}")
+
+    ordered_nodes = comp_list
+    F_unwrapped = np.array([f[n] + shifts[n] for n in ordered_nodes], dtype=float)
+    R_unwrapped = F_unwrapped @ H.T + origin
+
+    index_of = {n: idx for idx, n in enumerate(ordered_nodes)}
+
+    if return_nodes:
+        return R_unwrapped, index_of, ordered_nodes
+    return R_unwrapped, index_of
