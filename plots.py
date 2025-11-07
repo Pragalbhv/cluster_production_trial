@@ -5,9 +5,16 @@ This module provides plotting utilities inspired by cluster_analysis/utils/plots
 Functions are implemented locally for Phase 1 scope.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import numpy as np
 import matplotlib.pyplot as plt
+
+try:
+    import networkx as nx
+    NETWORKX_AVAILABLE = True
+except ImportError:
+    NETWORKX_AVAILABLE = False
+    nx = None
 
 # -----------------------------
 # Standard style config
@@ -326,6 +333,212 @@ def plot_weighted_coordination_comparison(
     ax.grid(True, alpha=PLOT_CONFIG['grid_alpha'])
     
     return ax
+
+
+# ============================================================================
+# Phase 4: Graph Component Plotting
+# ============================================================================
+
+def plot_3d_cluster_component(
+    graph: Any,
+    cluster_ids: np.ndarray,
+    cluster_id: int,
+    positions: np.ndarray,
+    species: np.ndarray,
+    cation: str = 'Pu',
+    anion: str = 'Cl',
+    show_na_context: bool = True,
+    show_edges: bool = True,
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Plot a specific cluster component in 3D showing both cation and anion atoms.
+    
+    This function implements Phase 4 plotting: Visualize a specific cluster by cluster_id.
+    Unlike subplot-based functions, this plots a single cluster in one figure.
+    
+    Args:
+        graph: networkx Graph from build_shared_anion_graph_from_voronoi
+        cluster_ids: (N,) array of cluster IDs (-1 for unclustered)
+        cluster_id: Specific cluster ID to plot (must be >= 0)
+        positions: (N, 3) array of atom positions
+        species: (N,) array of species names/identifiers
+        cation: Cation species (default: 'Pu', can be 'Ce' or other)
+        anion: Anion species (default: 'Cl')
+        show_na_context: Whether to show Na atoms as background context (default: True)
+        show_edges: Whether to draw edges between atoms (default: True)
+        title: Optional custom title (default: None, auto-generated)
+        save_path: Optional path to save figure (default: None)
+    
+    Raises:
+        ImportError: If networkx is not available
+        ValueError: If cluster_id is invalid or cluster not found
+    
+    Examples:
+        >>> plot_3d_cluster_component(
+        ...     graph, cluster_ids, cluster_id=0,
+        ...     positions, species, cation='Pu', anion='Cl'
+        ... )
+    """
+    if not NETWORKX_AVAILABLE:
+        raise ImportError("networkx is required for plot_3d_cluster_component")
+    
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    
+    if cluster_id < 0:
+        raise ValueError(f"cluster_id must be >= 0, got {cluster_id}")
+    
+    # Find atoms in the specified cluster
+    cluster_mask = (cluster_ids == cluster_id)
+    cluster_atom_indices = np.where(cluster_mask)[0]
+    
+    if len(cluster_atom_indices) == 0:
+        raise ValueError(f"Cluster {cluster_id} not found or empty")
+    
+    # Get subgraph for this cluster
+    cluster_nodes = [int(idx) for idx in cluster_atom_indices if idx in graph.nodes()]
+    if len(cluster_nodes) == 0:
+        raise ValueError(f"No nodes from cluster {cluster_id} found in graph")
+    
+    cluster_subgraph = graph.subgraph(cluster_nodes)
+    
+    # Setup plot style
+    setup_plot_style()
+    
+    # Create figure with single 3D axes
+    fig = plt.figure(figsize=PLOT_CONFIG['figure_size_3d'])
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Plot Na context if requested
+    if show_na_context:
+        na_mask = (species == 'Na')
+        if np.any(na_mask):
+            ax.scatter(
+                positions[na_mask, 0],
+                positions[na_mask, 1],
+                positions[na_mask, 2],
+                c=COLORS['species']['Na'],
+                s=20,
+                alpha=PLOT_CONFIG['alpha_background'],
+                label='Na (context)',
+            )
+    
+    # Separate atoms by species in cluster
+    cation_positions = []
+    anion_positions = []
+    cation_indices = []
+    anion_indices = []
+    
+    for node in cluster_subgraph.nodes():
+        if node < len(positions) and node < len(species):
+            pos = np.asarray(positions[node])
+            if pos.shape[0] == 3:
+                if species[node] == cation:
+                    cation_positions.append(pos)
+                    cation_indices.append(node)
+                elif species[node] == anion:
+                    anion_positions.append(pos)
+                    anion_indices.append(node)
+    
+    # Plot cation atoms
+    if len(cation_positions) > 0:
+        cation_positions = np.vstack(cation_positions)
+        cation_color = COLORS['species'].get(cation, COLORS['species']['Pu'])
+        ax.scatter(
+            cation_positions[:, 0],
+            cation_positions[:, 1],
+            cation_positions[:, 2],
+            c=cation_color,
+            s=100,
+            alpha=PLOT_CONFIG['alpha_main'],
+            label=f'{cation} (n={len(cation_positions)})',
+            edgecolors='darkred',
+            linewidth=0.5,
+        )
+    
+    # Plot anion atoms
+    if len(anion_positions) > 0:
+        anion_positions = np.vstack(anion_positions)
+        ax.scatter(
+            anion_positions[:, 0],
+            anion_positions[:, 1],
+            anion_positions[:, 2],
+            c=COLORS['species'][anion],
+            s=80,
+            alpha=PLOT_CONFIG['alpha_main'],
+            label=f'{anion} (n={len(anion_positions)})',
+            edgecolors='darkgreen',
+            linewidth=0.5,
+        )
+    
+    # Plot edges if requested
+    if show_edges and cluster_subgraph.number_of_edges() > 0:
+        # Get edge areas for line width scaling
+        areas = [edata.get("area", 1.0) for _, _, edata in cluster_subgraph.edges(data=True)]
+        if len(areas) > 0:
+            a_min = float(np.min(areas))
+            a_max = float(np.max(areas))
+        else:
+            a_min = a_max = 1.0
+        
+        # Helper function for line width from area
+        def lw_from_area(a: float, a0: float, a1: float) -> float:
+            if a1 <= a0:
+                return 1.0
+            t = (float(a) - a0) / (a1 - a0)
+            return 0.6 + 2.4 * max(0.0, min(1.0, t))
+        
+        # Draw edges
+        for u, v, edata in cluster_subgraph.edges(data=True):
+            if u < len(positions) and v < len(positions):
+                p1 = np.asarray(positions[u])
+                p2 = np.asarray(positions[v])
+                if p1.shape[0] == 3 and p2.shape[0] == 3:
+                    area = edata.get("area", 1.0)
+                    lw = lw_from_area(area, a_min, a_max)
+                    
+                    # Color edge based on species pair
+                    u_species = species[u] if u < len(species) else 'unknown'
+                    v_species = species[v] if v < len(species) else 'unknown'
+                    
+                    if (u_species == cation and v_species == anion) or \
+                       (u_species == anion and v_species == cation):
+                        edge_color = 'purple'  # Cation-anion edge
+                    elif u_species == cation and v_species == cation:
+                        edge_color = 'darkred'  # Cation-cation edge
+                    elif u_species == anion and v_species == anion:
+                        edge_color = 'darkgreen'  # Anion-anion edge
+                    else:
+                        edge_color = 'gray'
+                    
+                    ax.plot(
+                        [p1[0], p2[0]],
+                        [p1[1], p2[1]],
+                        [p1[2], p2[2]],
+                        color=edge_color,
+                        alpha=0.7,
+                        linewidth=lw,
+                    )
+    
+    # Set title
+    if title is None:
+        title = f"{cation}-{anion} Cluster {cluster_id}\n"
+        title += f"({cation}: {len(cation_positions)}, {anion}: {len(anion_positions)}, "
+        title += f"Edges: {cluster_subgraph.number_of_edges()})"
+    
+    ax.set_title(title, fontsize=PLOT_CONFIG['font_size_title'], fontweight='bold')
+    ax.set_xlabel("X (Å)", fontsize=PLOT_CONFIG['font_size_labels'])
+    ax.set_ylabel("Y (Å)", fontsize=PLOT_CONFIG['font_size_labels'])
+    ax.set_zlabel("Z (Å)", fontsize=PLOT_CONFIG['font_size_labels'])
+    ax.legend(fontsize=PLOT_CONFIG['font_size_legend'])
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=PLOT_CONFIG['dpi'], bbox_inches='tight')
+    
+    plt.show()
 
 
 

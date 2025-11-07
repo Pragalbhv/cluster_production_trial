@@ -10,10 +10,16 @@ Functions are implemented/inspired by cluster_analysis modules.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Tuple
 
 import numpy as np
 
+try:
+    import networkx as nx
+    NETWORKX_AVAILABLE = True
+except ImportError:
+    NETWORKX_AVAILABLE = False
+    nx = None
 
 from ovito.io import import_file
 from ovito.pipeline import Pipeline
@@ -190,6 +196,7 @@ def apply_voronoi_analysis(
     use_radii: bool = False,
     edge_threshold: float = 0.0,
     generate_polyhedra: bool = True,
+    relative_face_threshold: float = 0.0,
 ) -> DataCollection:
     """
     Apply VoronoiAnalysisModifier to a pipeline and return the computed DataCollection.
@@ -205,6 +212,10 @@ def apply_voronoi_analysis(
         edge_threshold: Minimum edge length threshold (default: 0.0)
         generate_polyhedra: Whether to output Voronoi cells as polyhedral SurfaceMesh (default: True)
             Enables extraction of face areas from the surface mesh.
+        relative_face_threshold: Minimum relative face area threshold (default: 0.0)
+            Faces with area < relative_face_threshold * total_cell_area are filtered out atom-wise
+            by OVITO during tessellation. This is more efficient than post-processing and ensures
+            atom-wise thresholding (not pair-wise). If 0.0, all faces are included.
     
     Returns:
         DataCollection object with Voronoi analysis results
@@ -215,13 +226,14 @@ def apply_voronoi_analysis(
     if not OVITO_AVAILABLE:
         raise ImportError("OVITO is required")
     
-    # Create VoronoiAnalysisModifier
+    # Create VoronoiAnalysisModifier with relative_face_threshold
     voro = VoronoiAnalysisModifier(
         compute_indices=compute_indices,
         generate_bonds=generate_bonds,
         use_radii=use_radii,
         edge_threshold=edge_threshold,
         generate_polyhedra=generate_polyhedra,
+        relative_face_threshold=relative_face_threshold,
     )
     
     # Add modifier to pipeline (temporarily)
@@ -442,6 +454,7 @@ def perform_voronoi_tessellation(
     use_radii: bool = False,
     edge_threshold: float = 0.0,
     compute_surface_mesh: bool = False,
+    relative_face_threshold: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Complete Voronoi tessellation analysis for a pipeline frame.
@@ -461,13 +474,17 @@ def perform_voronoi_tessellation(
         compute_surface_mesh: Whether to compute surface mesh for face areas (default: False)
             When True, enables generate_polyhedra to create SurfaceMesh with face area properties.
             When False, generate_polyhedra defaults to True for face area extraction.
+        relative_face_threshold: Minimum relative face area threshold (default: 0.0)
+            Faces with area < relative_face_threshold * total_cell_area are filtered out atom-wise
+            by OVITO during tessellation. Use 0.0 for Phase 2/3 (all faces needed for coordination).
+            Use non-zero value for Phase 4 (filtered faces for graph construction).
     
     Returns:
         Dictionary containing:
             - data: DataCollection object
-            - bonds: Dictionary with pairs, face_areas, num_bonds
+            - bonds: Dictionary with pairs, face_areas, num_bonds (filtered if relative_face_threshold > 0)
             - particle_properties: Dictionary with atomic_volume, coordination, voronoi_index
-            - face_areas: Array of face areas (from bonds or computed)
+            - face_areas: Array of face areas (from bonds or computed, filtered if relative_face_threshold > 0)
     """
     if not OVITO_AVAILABLE:
         raise ImportError("OVITO is required")
@@ -482,6 +499,7 @@ def perform_voronoi_tessellation(
         use_radii=use_radii,
         edge_threshold=edge_threshold,
         generate_polyhedra=True,
+        relative_face_threshold=relative_face_threshold,
     )
     
     # Step 2: Extract bonds topology
@@ -1107,3 +1125,175 @@ def compute_weighted_coordination_analysis(
         'species': species_array,
     }
 
+
+# ============================================================================
+# Phase 4: Area Thresholding and Shared Anion Graph
+# ============================================================================
+
+def build_shared_anion_graph_from_voronoi(
+    pairs: np.ndarray,
+    face_areas: np.ndarray,
+    positions: np.ndarray,
+    species: np.ndarray,
+    cation: str = 'Pu',
+    anion: str = 'Cl',
+) -> Any:
+    """
+    Build a shared anion graph from Voronoi tessellation faces.
+    
+    This function implements Phase 4.2: Build shared anion graph from Voronoi tessellation.
+    
+    Creates a networkx Graph with:
+    - Nodes: All Pu and Cl atoms (with attributes: position, species, index)
+    - Edges: Connections via shared Voronoi faces (with attribute: area)
+    
+    Only includes edges between Pu-Cl (cation-anion) pairs.
+    
+    Args:
+        pairs: (M, 2) array of atom index pairs (can be pre-filtered or raw)
+        face_areas: (M,) array of face areas corresponding to pairs
+        positions: (N, 3) array of atom positions
+        species: (N,) array of species names/identifiers
+        cation: Species to use as cation (default: 'Pu')
+        anion: Species to use as anion (default: 'Cl')
+    
+    Returns:
+        networkx Graph with Pu and Cl nodes and their connections
+    
+    Raises:
+        ImportError: If networkx is not available
+    
+    Examples:
+        >>> pairs = np.array([[0, 1], [1, 2]])
+        >>> areas = np.array([10.0, 5.0])
+        >>> positions = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        >>> species = np.array(['Pu', 'Cl', 'Pu'])
+        >>> graph = build_shared_anion_graph_from_voronoi(pairs, areas, positions, species)
+    """
+    if not NETWORKX_AVAILABLE:
+        raise ImportError("networkx is required for build_shared_anion_graph_from_voronoi")
+    
+    if len(pairs) == 0:
+        # Return empty graph but still add nodes for Pu and Cl atoms
+        G = nx.Graph()
+        # Add nodes for all Pu and Cl atoms
+        for i in range(len(species)):
+            if species[i] == cation or species[i] == anion:
+                G.add_node(
+                    int(i),
+                    position=np.asarray(positions[i]),
+                    species=str(species[i]),
+                    index=int(i)
+                )
+        return G
+    
+    if len(face_areas) != len(pairs):
+        raise ValueError(f"face_areas length ({len(face_areas)}) must match pairs length ({len(pairs)})")
+    
+    if len(positions) != len(species):
+        raise ValueError(f"positions length ({len(positions)}) must match species length ({len(species)})")
+    
+    # Create graph
+    G = nx.Graph()
+    
+    # Add nodes for all Pu and Cl atoms
+    for i in range(len(species)):
+        if species[i] == cation or species[i] == anion:
+            G.add_node(
+                int(i),
+                position=np.asarray(positions[i]),
+                species=str(species[i]),
+                index=int(i)
+            )
+    
+    # Add edges for pairs involving Pu or Cl atoms
+    for idx, (i, j) in enumerate(pairs):
+        i_idx = int(i)
+        j_idx = int(j)
+        
+        # Check if both atoms are within bounds
+        if i_idx >= len(species) or j_idx >= len(species):
+            continue
+        
+        # Only add edges if both atoms are Pu or Cl
+        if (species[i_idx] == cation and species[j_idx] == anion) or \
+           (species[i_idx] == anion and species[j_idx] == cation):
+            area = face_areas[idx] if idx < len(face_areas) else 0.0
+            G.add_edge(
+                i_idx,
+                j_idx,
+                area=float(area),
+                species_pair=f"{species[i_idx]}-{species[j_idx]}"
+            )
+    
+    return G
+
+
+def assign_cluster_ids_from_graph(
+    graph: Any,
+    num_atoms: int,
+    species: np.ndarray,
+    cation: str = 'Pu',
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Assign cluster IDs to all atoms based on connected components in the graph.
+    
+    This function implements Phase 4.3: Assign cluster IDs from graph.
+    
+    Uses networkx connected_components to find all connected components.
+    Clusters are sorted by number of cation atoms (descending) before assigning IDs,
+    so cluster_id=0 corresponds to the cluster with the most cation atoms.
+    All atoms (Pu and Cl) in the same component get the same cluster ID.
+    Na atoms and unconnected atoms get cluster_id = -1.
+    
+    Args:
+        graph: networkx Graph from build_shared_anion_graph_from_voronoi
+        num_atoms: Total number of atoms in system
+        species: (N,) array of species names (required for sorting by cation count)
+        cation: Species to use as cation for sorting (default: 'Pu')
+    
+    Returns:
+        Tuple containing:
+            - cluster_ids: (N,) array of cluster IDs (-1 for unclustered)
+            - cluster_sizes: Array of cluster sizes (sorted by cation count, descending)
+    
+    Raises:
+        ImportError: If networkx is not available
+    
+    Examples:
+        >>> import networkx as nx
+        >>> G = nx.Graph()
+        >>> G.add_edge(0, 1)
+        >>> G.add_edge(1, 2)
+        >>> species = np.array(['Pu', 'Cl', 'Pu', 'Na', 'Na'])
+        >>> cluster_ids, cluster_sizes = assign_cluster_ids_from_graph(G, num_atoms=5, species=species)
+    """
+    if not NETWORKX_AVAILABLE:
+        raise ImportError("networkx is required for assign_cluster_ids_from_graph")
+    
+    if len(species) != num_atoms:
+        raise ValueError(f"species length ({len(species)}) must match num_atoms ({num_atoms})")
+    
+    # Initialize cluster_ids array with -1 (unclustered)
+    cluster_ids = -np.ones(num_atoms, dtype=int)
+    
+    # Find connected components
+    components = list(nx.connected_components(graph))
+    
+    # Sort components by number of cation atoms (descending)
+    def count_cations(comp):
+        return sum(1 for idx in comp if int(idx) < len(species) and species[int(idx)] == cation)
+    
+    sorted_components = sorted(components, key=count_cations, reverse=True)
+    
+    # Assign cluster IDs based on sorted order
+    for cluster_id, component in enumerate(sorted_components):
+        for atom_idx in component:
+            atom_idx_int = int(atom_idx)
+            if atom_idx_int < num_atoms:
+                cluster_ids[atom_idx_int] = cluster_id
+    
+    # Compute cluster sizes (matching sorted order)
+    cluster_sizes = np.array([len(comp) for comp in sorted_components], dtype=int)
+    
+    return cluster_ids, cluster_sizes
