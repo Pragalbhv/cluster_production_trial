@@ -349,6 +349,7 @@ def plot_3d_cluster_component(
     anion: str = 'Cl',
     show_na_context: bool = True,
     show_edges: bool = True,
+    scale_edge_width_by_area: bool = True,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
 ) -> None:
@@ -368,6 +369,8 @@ def plot_3d_cluster_component(
         anion: Anion species (default: 'Cl')
         show_na_context: Whether to show Na atoms as background context (default: True)
         show_edges: Whether to draw edges between atoms (default: True)
+        scale_edge_width_by_area: Whether to scale edge width by Voronoi face area (default: True).
+            If False, all edges use uniform width of 1.5.
         title: Optional custom title (default: None, auto-generated)
         save_path: Optional path to save figure (default: None)
     
@@ -405,6 +408,9 @@ def plot_3d_cluster_component(
     
     # Setup plot style
     setup_plot_style()
+    
+    # Enable 3D rotation
+    plt.rcParams["axes3d.mouserotationstyle"] = "trackball"
     
     # Create figure with single 3D axes
     fig = plt.figure(figsize=PLOT_CONFIG['figure_size_3d'])
@@ -474,20 +480,25 @@ def plot_3d_cluster_component(
     
     # Plot edges if requested
     if show_edges and cluster_subgraph.number_of_edges() > 0:
-        # Get edge areas for line width scaling
-        areas = [edata.get("area", 1.0) for _, _, edata in cluster_subgraph.edges(data=True)]
-        if len(areas) > 0:
-            a_min = float(np.min(areas))
-            a_max = float(np.max(areas))
+        # Calculate edge widths based on area scaling if enabled
+        if scale_edge_width_by_area:
+            # Get edge areas for line width scaling
+            areas = [edata.get("area", 1.0) for _, _, edata in cluster_subgraph.edges(data=True)]
+            if len(areas) > 0:
+                a_min = float(np.min(areas))
+                a_max = float(np.max(areas))
+            else:
+                a_min = a_max = 1.0
+            
+            # Helper function for line width from area
+            def lw_from_area(a: float, a0: float, a1: float) -> float:
+                if a1 <= a0:
+                    return 1.0
+                t = (float(a) - a0) / (a1 - a0)
+                return 0.6 + 2.4 * max(0.0, min(1.0, t))
         else:
-            a_min = a_max = 1.0
-        
-        # Helper function for line width from area
-        def lw_from_area(a: float, a0: float, a1: float) -> float:
-            if a1 <= a0:
-                return 1.0
-            t = (float(a) - a0) / (a1 - a0)
-            return 0.6 + 2.4 * max(0.0, min(1.0, t))
+            # Use uniform width for all edges
+            uniform_width = 1.5
         
         # Draw edges
         for u, v, edata in cluster_subgraph.edges(data=True):
@@ -495,8 +506,12 @@ def plot_3d_cluster_component(
                 p1 = np.asarray(positions[u])
                 p2 = np.asarray(positions[v])
                 if p1.shape[0] == 3 and p2.shape[0] == 3:
-                    area = edata.get("area", 1.0)
-                    lw = lw_from_area(area, a_min, a_max)
+                    # Determine line width
+                    if scale_edge_width_by_area:
+                        area = edata.get("area", 1.0)
+                        lw = lw_from_area(area, a_min, a_max)
+                    else:
+                        lw = uniform_width
                     
                     # Color edge based on species pair
                     u_species = species[u] if u < len(species) else 'unknown'
