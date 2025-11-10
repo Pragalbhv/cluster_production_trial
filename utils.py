@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, Dict, Tuple, List
 from collections import deque
-
+from tqdm import tqdm
 import numpy as np
 
 try:
@@ -1368,11 +1368,18 @@ def unwrap_component(
 
     comp_list = sorted(comp)
     if root is None:
-        root = comp_list[0]
-        if species is not None and len(species) > 0:
-            cation_nodes = [n for n in comp_list if n < len(species) and str(species[n]) == cation]
-            if cation_nodes:
-                root = cation_nodes[0]
+        # Compute centroid and find closest node
+        comp_positions = np.array([f[n] for n in comp_list if n < len(f)])
+        if len(comp_positions) > 0:
+            centroid = np.mean(comp_positions, axis=0)
+            candidates = [n for n in comp_list if n < len(f)]
+            distances = []
+            for n in candidates:
+                df = (f[n] - centroid + 0.5) % 1.0 - 0.5  # minimum-image
+                distances.append(np.sum(df ** 2))
+            root = candidates[np.argmin(distances)]
+        else:
+            root = comp_list[0]
     elif root not in comp:
         raise ValueError(f"root node {root} not in component_nodes")
 
@@ -1419,3 +1426,338 @@ def unwrap_component(
     if return_nodes:
         return R_unwrapped, index_of, ordered_nodes
     return R_unwrapped, index_of
+
+
+# ============================================================================
+# Phase 5: Sharing Classification
+# ============================================================================
+
+def classify_pu_pu_sharing(
+    graph: Any,
+    species: np.ndarray,
+    cluster_ids: np.ndarray,
+    cation: str = 'Pu',
+    anion: str = 'Cl',
+) -> Dict[str, Any]:
+    """
+    Classify Pu-Pu connections via Cl atoms as face sharing (3+ Cl), edge sharing (2 Cl), 
+    or corner sharing (1 Cl), analyzing only pairs within the same cluster.
+    
+    This function implements Phase 5: Sharing Classification.
+    
+    Args:
+        graph: networkx Graph from build_shared_anion_graph_from_voronoi 
+               (contains Pu and Cl nodes, Pu-Cl edges only)
+        species: (N,) array of species names to identify Pu atoms
+        cluster_ids: (N,) array of cluster IDs (required - analysis is cluster-based)
+        cation: Species to use as cation (default: 'Pu')
+        anion: Species to use as anion (default: 'Cl')
+    
+    Returns:
+        Dictionary with:
+            - 'pairs': List of tuples (pu_i, pu_j, num_cl_bridges, sharing_type, cluster_id, cl_bridge_indices)
+            - 'num_pairs': Total number of Pu-Pu pairs analyzed
+            - 'sharing_counts': Dict with counts {'face': int, 'edge': int, 'corner': int, 'none': int}
+            - 'sharing_fractions': Dict with fractions {'face': float, 'edge': float, 'corner': float, 'none': float}
+            - 'per_cluster': Dict keyed by cluster_id with same structure
+    
+    Raises:
+        ImportError: If networkx is not available
+        ValueError: If cluster_ids length doesn't match species length
+    
+    Examples:
+        >>> import networkx as nx
+        >>> G = nx.Graph()
+        >>> G.add_node(0, species='Pu')
+        >>> G.add_node(1, species='Cl')
+        >>> G.add_node(2, species='Pu')
+        >>> G.add_edge(0, 1)
+        >>> G.add_edge(1, 2)
+        >>> species = np.array(['Pu', 'Cl', 'Pu'])
+        >>> cluster_ids = np.array([0, 0, 0])
+        >>> results = classify_pu_pu_sharing(G, species, cluster_ids)
+    """
+    if not NETWORKX_AVAILABLE:
+        raise ImportError("networkx is required for classify_pu_pu_sharing")
+    
+    if len(species) != len(cluster_ids):
+        raise ValueError(f"species length ({len(species)}) must match cluster_ids length ({len(cluster_ids)})")
+    
+    # Initialize results
+    all_pairs = []
+    sharing_counts = {'face': 0, 'edge': 0, 'corner': 0, 'none': 0}
+    per_cluster_results = {}
+    
+    # Get unique cluster IDs (skip -1 for unclustered)
+    unique_cluster_ids = [cid for cid in np.unique(cluster_ids) if cid >= 0]
+    
+    # Process each cluster
+    for cluster_id in unique_cluster_ids:
+        # Extract Pu and Cl node indices in this cluster
+        pu_nodes_in_cluster = [
+            n for n in graph.nodes() 
+            if n < len(species) and 
+            graph.nodes[n].get('species') == cation and 
+            cluster_ids[n] == cluster_id
+        ]
+        cl_nodes_in_cluster = [
+            n for n in graph.nodes() 
+            if n < len(species) and 
+            graph.nodes[n].get('species') == anion and 
+            cluster_ids[n] == cluster_id
+        ]
+        
+        # Convert to sets for efficient lookup
+        cl_nodes_set = set(cl_nodes_in_cluster)
+        
+        # Initialize per-cluster results
+        cluster_pairs = []
+        cluster_sharing_counts = {'face': 0, 'edge': 0, 'corner': 0, 'none': 0}
+        
+        # Analyze each unique Pu-Pu pair within the cluster
+        for i in range(len(pu_nodes_in_cluster)):
+            pu_i = pu_nodes_in_cluster[i]
+            for j in range(i + 1, len(pu_nodes_in_cluster)):
+                pu_j = pu_nodes_in_cluster[j]
+                
+                # Find Cl neighbors of Pu_i that are in the same cluster
+                cl_neighbors_i = [
+                    n for n in graph.neighbors(pu_i) 
+                    if n in cl_nodes_set
+                ]
+                
+                # Find Cl neighbors of Pu_j that are in the same cluster
+                cl_neighbors_j = [
+                    n for n in graph.neighbors(pu_j) 
+                    if n in cl_nodes_set
+                ]
+                
+                # Count shared Cl atoms within cluster
+                shared_cl = set(cl_neighbors_i) & set(cl_neighbors_j)
+                num_cl_bridges = len(shared_cl)
+                cl_bridge_indices = sorted(list(shared_cl))
+                
+                # Classify sharing type
+                if num_cl_bridges >= 3:
+                    sharing_type = 'face'
+                elif num_cl_bridges == 2:
+                    sharing_type = 'edge'
+                elif num_cl_bridges == 1:
+                    sharing_type = 'corner'
+                else:
+                    sharing_type = 'none'
+                
+                # Store pair information
+                pair_info = (pu_i, pu_j, num_cl_bridges, sharing_type, cluster_id, cl_bridge_indices)
+                all_pairs.append(pair_info)
+                cluster_pairs.append(pair_info)
+                
+                # Update counts
+                sharing_counts[sharing_type] += 1
+                cluster_sharing_counts[sharing_type] += 1
+        
+        # Store per-cluster results
+        cluster_num_pairs = len(cluster_pairs)
+        cluster_sharing_fractions = {}
+        if cluster_num_pairs > 0:
+            for stype in ['face', 'edge', 'corner', 'none']:
+                cluster_sharing_fractions[stype] = cluster_sharing_counts[stype] / cluster_num_pairs
+        else:
+            for stype in ['face', 'edge', 'corner', 'none']:
+                cluster_sharing_fractions[stype] = 0.0
+        
+        per_cluster_results[cluster_id] = {
+            'pairs': cluster_pairs,
+            'num_pairs': cluster_num_pairs,
+            'sharing_counts': cluster_sharing_counts,
+            'sharing_fractions': cluster_sharing_fractions,
+        }
+    
+    # Compute overall fractions
+    total_pairs = len(all_pairs)
+    sharing_fractions = {}
+    if total_pairs > 0:
+        for stype in ['face', 'edge', 'corner', 'none']:
+            sharing_fractions[stype] = sharing_counts[stype] / total_pairs
+    else:
+        for stype in ['face', 'edge', 'corner', 'none']:
+            sharing_fractions[stype] = 0.0
+    
+    return {
+        'pairs': all_pairs,
+        'num_pairs': total_pairs,
+        'sharing_counts': sharing_counts,
+        'sharing_fractions': sharing_fractions,
+        'per_cluster': per_cluster_results,
+    }
+
+
+def compute_sharing_statistics(
+    sharing_results: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Format results from classify_pu_pu_sharing into summary statistics and per-cluster breakdowns.
+    
+    This function implements Phase 5: Statistics formatting for sharing classification.
+    
+    Args:
+        sharing_results: Dictionary returned from classify_pu_pu_sharing
+    
+    Returns:
+        Dictionary with:
+            - 'summary': Overall statistics (counts, fractions, percentages)
+            - 'by_cluster': Per-cluster breakdown
+            - 'detailed_pairs': Full list of pairs with all metadata
+    
+    Examples:
+        >>> results = classify_pu_pu_sharing(graph, species, cluster_ids)
+        >>> stats = compute_sharing_statistics(results)
+        >>> print(stats['summary'])
+    """
+    summary = {
+        'total_pairs': sharing_results['num_pairs'],
+        'counts': sharing_results['sharing_counts'].copy(),
+        'fractions': sharing_results['sharing_fractions'].copy(),
+        'percentages': {
+            'face': sharing_results['sharing_fractions']['face'] * 100,
+            'edge': sharing_results['sharing_fractions']['edge'] * 100,
+            'corner': sharing_results['sharing_fractions']['corner'] * 100,
+            'none': sharing_results['sharing_fractions']['none'] * 100,
+        }
+    }
+    
+    by_cluster = {}
+    for cluster_id, cluster_data in sharing_results['per_cluster'].items():
+        by_cluster[cluster_id] = {
+            'num_pairs': cluster_data['num_pairs'],
+            'counts': cluster_data['sharing_counts'].copy(),
+            'fractions': cluster_data['sharing_fractions'].copy(),
+            'percentages': {
+                'face': cluster_data['sharing_fractions']['face'] * 100,
+                'edge': cluster_data['sharing_fractions']['edge'] * 100,
+                'corner': cluster_data['sharing_fractions']['corner'] * 100,
+                'none': cluster_data['sharing_fractions']['none'] * 100,
+            }
+        }
+    
+    return {
+        'summary': summary,
+        'by_cluster': by_cluster,
+        'detailed_pairs': sharing_results['pairs'],
+    }
+
+
+def build_pu_pu_graph_with_bridges(
+    graph: Any,
+    species: np.ndarray,
+    cluster_ids: np.ndarray,
+    positions: np.ndarray,
+    cation: str = 'Pu',
+    anion: str = 'Cl',
+    sharing_results: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """
+    Build a Pu-Pu graph where edges represent Pu-Pu pairs connected via shared Cl atoms,
+    with edge weights equal to the number of Cl bridges.
+    
+    This function implements Phase 5: Pu-Pu graph construction with bridge information.
+    
+    To avoid duplicate computation, this function can accept pre-computed sharing_results
+    from classify_pu_pu_sharing(). If not provided, it will compute them internally.
+    
+    Args:
+        graph: networkx Graph from build_shared_anion_graph_from_voronoi 
+               (contains Pu and Cl nodes, Pu-Cl edges only)
+        species: (N,) array of species names to identify Pu atoms
+        cluster_ids: (N,) array of cluster IDs (required - analysis is cluster-based)
+        positions: (N, 3) array of atom positions (for node attributes)
+        cation: Species to use as cation (default: 'Pu')
+        anion: Species to use as anion (default: 'Cl')
+        sharing_results: Optional pre-computed results from classify_pu_pu_sharing()
+                        to avoid duplicate iteration. If None, will compute internally.
+    
+    Returns:
+        networkx Graph with:
+            - Nodes: All Pu atoms (with attributes: position, species, index, cluster_id)
+            - Edges: Pu-Pu pairs connected via shared Cl atoms (with attributes: 
+                     weight, num_cl_bridges, cl_bridge_indices, sharing_type, cluster_id)
+    
+    Raises:
+        ImportError: If networkx is not available
+        ValueError: If input arrays have mismatched lengths
+    
+    Examples:
+        >>> G_pu_cl = build_shared_anion_graph_from_voronoi(...)
+        >>> # Option 1: Compute sharing results first, then build graph (efficient)
+        >>> sharing_results = classify_pu_pu_sharing(G_pu_cl, species, cluster_ids)
+        >>> G_pu_pu = build_pu_pu_graph_with_bridges(G_pu_cl, species, cluster_ids, positions, sharing_results=sharing_results)
+        >>> # Option 2: Let function compute internally (less efficient if you also need sharing_results)
+        >>> G_pu_pu = build_pu_pu_graph_with_bridges(G_pu_cl, species, cluster_ids, positions)
+    """
+    if not NETWORKX_AVAILABLE:
+        raise ImportError("networkx is required for build_pu_pu_graph_with_bridges")
+    
+    if len(species) != len(cluster_ids):
+        raise ValueError(f"species length ({len(species)}) must match cluster_ids length ({len(cluster_ids)})")
+    if len(species) != len(positions):
+        raise ValueError(f"species length ({len(species)}) must match positions length ({len(positions)})")
+    
+    # If sharing_results not provided, compute them (but this will iterate again)
+    if sharing_results is None:
+        sharing_results = classify_pu_pu_sharing(
+            graph=graph,
+            species=species,
+            cluster_ids=cluster_ids,
+            cation=cation,
+            anion=anion,
+        )
+    
+    # Create new graph for Pu-Pu connections
+    G_pu_pu = nx.Graph()
+    
+    # Get unique cluster IDs from sharing_results
+    unique_cluster_ids = list(sharing_results['per_cluster'].keys())
+    
+    # Extract all Pu nodes from clusters once (including isolated ones)
+    # This is a lightweight operation compared to pair analysis
+    for cluster_id in unique_cluster_ids:
+        # Extract all Pu nodes in this cluster from the original graph
+        pu_nodes_in_cluster = [
+            n for n in graph.nodes() 
+            if n < len(species) and 
+            graph.nodes[n].get('species') == cation and 
+            cluster_ids[n] == cluster_id
+        ]
+        
+        # Add all Pu nodes to graph with attributes
+        for pu_node in pu_nodes_in_cluster:
+            if not G_pu_pu.has_node(pu_node):
+                G_pu_pu.add_node(
+                    pu_node,
+                    position=np.asarray(positions[pu_node]),
+                    species=str(species[pu_node]),
+                    index=int(pu_node),
+                    cluster_id=int(cluster_id)
+                )
+    
+    # Add edges from pre-computed pairs (only for pairs with bridges)
+    # This uses the already-computed sharing_results, avoiding duplicate iteration
+    for cluster_id in tqdm(unique_cluster_ids, desc="Adding Pu-Pu edges"):
+        cluster_data = sharing_results['per_cluster'][cluster_id]
+        
+        for pair in cluster_data['pairs']:
+            pu_i, pu_j, num_cl_bridges, sharing_type, cid, cl_bridge_indices = pair
+            
+            # Only add edge if there are shared Cl bridges (num_cl_bridges > 0)
+            if num_cl_bridges > 0:
+                G_pu_pu.add_edge(
+                    pu_i,
+                    pu_j,
+                    weight=num_cl_bridges,  # For graph algorithms
+                    num_cl_bridges=num_cl_bridges,
+                    cl_bridge_indices=cl_bridge_indices,
+                    sharing_type=sharing_type,
+                    cluster_id=int(cluster_id)
+                )
+    
+    return G_pu_pu

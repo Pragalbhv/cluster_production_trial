@@ -48,6 +48,8 @@ temp_*
 *.tmp
 *.log
 
+yuan_take/
+yuan_take/*
 # Keep log file in git
 # filesystem_changes.log is tracked
 
