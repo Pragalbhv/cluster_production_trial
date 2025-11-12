@@ -1,5 +1,5 @@
 """
-Utility functions for Voronoi-based Pu-Cl cluster analysis.
+Utility functions for Voronoi-based cation-Cl cluster analysis.
 
 This module provides:
 - File system change logging system
@@ -867,13 +867,13 @@ def build_coordination_histograms(
     face_areas: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
-    Build coordination histograms for Pu with different neighbor types.
+    Build coordination histograms for the cation with different neighbor types.
     
-    This function implements Phase 3.5: Build coordination histograms for Pu with neighbors:
-    - Pu-Cl coordination histogram
-    - Pu-Na coordination histogram
-    - Pu-Pu coordination histogram
-    - Pu-Any (total) coordination histogram
+    This function implements Phase 3.5: Build coordination histograms for the cation with neighbors:
+    - cation-Cl coordination histogram
+    - cation-Na coordination histogram
+    - cation-cation coordination histogram
+    - cation-Any (total) coordination histogram
     
     Supports different coordination types:
     - 'topological': Simple neighbor count (number of faces)
@@ -891,10 +891,10 @@ def build_coordination_histograms(
     
     Returns:
         Dictionary containing:
-            - pu_cl: Histogram data for Pu-Cl coordination
-            - pu_na: Histogram data for Pu-Na coordination
-            - pu_pu: Histogram data for Pu-Pu coordination
-            - pu_any: Histogram data for Pu-Any (total) coordination
+            - pu_cl: Histogram data for cation-Cl coordination
+            - pu_na: Histogram data for cation-Na coordination
+            - pu_pu: Histogram data for cation-cation coordination
+            - pu_any: Histogram data for cation-Any (total) coordination
             - bins: Bin edges used (same for all histograms)
             - coordination_type: Type of coordination used
     """
@@ -942,7 +942,7 @@ def build_coordination_histograms(
         # Use simple neighbor counts
         cn_cl = compute_topological_coordination(pairs, species, center_species, neighbor_species='Cl')
         cn_na = compute_topological_coordination(pairs, species, center_species, neighbor_species='Na')
-        cn_pu = compute_topological_coordination(pairs, species, center_species, neighbor_species='Pu')
+        cn_pu = compute_topological_coordination(pairs, species, center_species, neighbor_species=center_species)
         cn_any = compute_topological_coordination(pairs, species, center_species, neighbor_species=None)
         
         coordination_pu_cl = cn_cl['cn_values'].astype(float)
@@ -954,7 +954,7 @@ def build_coordination_histograms(
         # Use area-weighted coordination
         cn_cl = compute_area_weighted_coordination(pairs, face_areas, species, center_species, neighbor_species='Cl')
         cn_na = compute_area_weighted_coordination(pairs, face_areas, species, center_species, neighbor_species='Na')
-        cn_pu = compute_area_weighted_coordination(pairs, face_areas, species, center_species, neighbor_species='Pu')
+        cn_pu = compute_area_weighted_coordination(pairs, face_areas, species, center_species, neighbor_species=center_species)
         cn_any = compute_area_weighted_coordination(pairs, face_areas, species, center_species, neighbor_species=None)
         
         coordination_pu_cl = cn_cl['cn_values']
@@ -966,7 +966,7 @@ def build_coordination_histograms(
         # Use solid-angle-weighted coordination
         cn_cl = compute_solid_angle_weighted_coordination(positions, pairs, face_areas, species, center_species, neighbor_species='Cl')
         cn_na = compute_solid_angle_weighted_coordination(positions, pairs, face_areas, species, center_species, neighbor_species='Na')
-        cn_pu = compute_solid_angle_weighted_coordination(positions, pairs, face_areas, species, center_species, neighbor_species='Pu')
+        cn_pu = compute_solid_angle_weighted_coordination(positions, pairs, face_areas, species, center_species, neighbor_species=center_species)
         cn_any = compute_solid_angle_weighted_coordination(positions, pairs, face_areas, species, center_species, neighbor_species=None)
         
         coordination_pu_cl = cn_cl['cn_values']
@@ -1035,15 +1035,15 @@ def compute_weighted_coordination_analysis(
             - cn_topological_all: Topological CN values for all neighbors
             - cn_topological_cl: Topological CN values for Cl neighbors
             - cn_topological_na: Topological CN values for Na neighbors
-            - cn_topological_pu: Topological CN values for Pu neighbors
+            - cn_topological_pu: Topological CN values for cation neighbors
             - cn_a_all: CN_A values for all neighbors
             - cn_a_cl: CN_A values for Cl neighbors
             - cn_a_na: CN_A values for Na neighbors
-            - cn_a_pu: CN_A values for Pu neighbors
+            - cn_a_pu: CN_A values for cation neighbors
             - cn_omega_all: CN_Ω values for all neighbors
             - cn_omega_cl: CN_Ω values for Cl neighbors
             - cn_omega_na: CN_Ω values for Na neighbors
-            - cn_omega_pu: CN_Ω values for Pu neighbors
+            - cn_omega_pu: CN_Ω values for cation neighbors
             - histograms: Dictionary with coordination histograms (topological by default)
             - positions: (N, 3) array of positions
             - species: (N,) array of species
@@ -1072,7 +1072,7 @@ def compute_weighted_coordination_analysis(
         pairs, species_array, center_species, neighbor_species='Na'
     )
     cn_topological_pu = compute_topological_coordination(
-        pairs, species_array, center_species, neighbor_species='Pu'
+        pairs, species_array, center_species, neighbor_species=center_species
     )
     
     # Compute CN_A for different neighbor types
@@ -1086,7 +1086,7 @@ def compute_weighted_coordination_analysis(
         pairs, face_areas, species_array, center_species, neighbor_species='Na'
     )
     cn_a_pu = compute_area_weighted_coordination(
-        pairs, face_areas, species_array, center_species, neighbor_species='Pu'
+        pairs, face_areas, species_array, center_species, neighbor_species=center_species
     )
     
     # Compute CN_Ω for different neighbor types
@@ -1100,7 +1100,7 @@ def compute_weighted_coordination_analysis(
         positions, pairs, face_areas, species_array, center_species, neighbor_species='Na'
     )
     cn_omega_pu = compute_solid_angle_weighted_coordination(
-        positions, pairs, face_areas, species_array, center_species, neighbor_species='Pu'
+        positions, pairs, face_areas, species_array, center_species, neighbor_species=center_species
     )
     
     # Build coordination histograms (default: topological)
@@ -1145,10 +1145,10 @@ def build_shared_anion_graph_from_voronoi(
     This function implements Phase 4.2: Build shared anion graph from Voronoi tessellation.
     
     Creates a networkx Graph with:
-    - Nodes: All Pu and Cl atoms (with attributes: position, species, index)
+    - Nodes: All cation and Cl atoms (with attributes: position, species, index)
     - Edges: Connections via shared Voronoi faces (with attribute: area)
     
-    Only includes edges between Pu-Cl (cation-anion) pairs.
+    Only includes edges between cation-anion pairs.
     
     Args:
         pairs: (M, 2) array of atom index pairs (can be pre-filtered or raw)
@@ -1159,7 +1159,7 @@ def build_shared_anion_graph_from_voronoi(
         anion: Species to use as anion (default: 'Cl')
     
     Returns:
-        networkx Graph with Pu and Cl nodes and their connections
+        networkx Graph with cation and Cl nodes and their connections
     
     Raises:
         ImportError: If networkx is not available
@@ -1242,10 +1242,11 @@ def assign_cluster_ids_from_graph(
     This function implements Phase 4.3: Assign cluster IDs from graph.
     
     Uses networkx connected_components to find all connected components.
+    Only components with at least one cation atom are assigned cluster IDs.
     Clusters are sorted by number of cation atoms (descending) before assigning IDs,
     so cluster_id=0 corresponds to the cluster with the most cation atoms.
-    All atoms (Pu and Cl) in the same component get the same cluster ID.
-    Na atoms and unconnected atoms get cluster_id = -1.
+    All atoms (cation and Cl) in the same component get the same cluster ID.
+    Na atoms, unconnected atoms, and components without any cations get cluster_id = -1.
     
     Args:
         graph: networkx Graph from build_shared_anion_graph_from_voronoi
@@ -1281,11 +1282,15 @@ def assign_cluster_ids_from_graph(
     # Find connected components
     components = list(nx.connected_components(graph))
     
-    # Sort components by number of cation atoms (descending)
+    # Count cations in each component
     def count_cations(comp):
         return sum(1 for idx in comp if int(idx) < len(species) and species[int(idx)] == cation)
     
-    sorted_components = sorted(components, key=count_cations, reverse=True)
+    # Filter components to only include those with at least one cation
+    components_with_cations = [comp for comp in components if count_cations(comp) > 0]
+    
+    # Sort components by number of cation atoms (descending)
+    sorted_components = sorted(components_with_cations, key=count_cations, reverse=True)
     
     # Assign cluster IDs based on sorted order
     for cluster_id, component in enumerate(sorted_components):
@@ -1432,7 +1437,7 @@ def unwrap_component(
 # Phase 5: Sharing Classification
 # ============================================================================
 
-def classify_pu_pu_sharing(
+def classify_cation_cation_sharing(
     graph: Any,
     species: np.ndarray,
     cluster_ids: np.ndarray,
@@ -1440,23 +1445,23 @@ def classify_pu_pu_sharing(
     anion: str = 'Cl',
 ) -> Dict[str, Any]:
     """
-    Classify Pu-Pu connections via Cl atoms as face sharing (3+ Cl), edge sharing (2 Cl), 
+    Classify cation-cation connections via Cl atoms as face sharing (3+ Cl), edge sharing (2 Cl), 
     or corner sharing (1 Cl), analyzing only pairs within the same cluster.
     
     This function implements Phase 5: Sharing Classification.
     
     Args:
         graph: networkx Graph from build_shared_anion_graph_from_voronoi 
-               (contains Pu and Cl nodes, Pu-Cl edges only)
-        species: (N,) array of species names to identify Pu atoms
+               (contains cation and Cl nodes, cation-Cl edges only)
+        species: (N,) array of species names to identify cation atoms
         cluster_ids: (N,) array of cluster IDs (required - analysis is cluster-based)
         cation: Species to use as cation (default: 'Pu')
         anion: Species to use as anion (default: 'Cl')
     
     Returns:
         Dictionary with:
-            - 'pairs': List of tuples (pu_i, pu_j, num_cl_bridges, sharing_type, cluster_id, cl_bridge_indices)
-            - 'num_pairs': Total number of Pu-Pu pairs analyzed
+            - 'pairs': List of tuples (cation_i, cation_j, num_cl_bridges, sharing_type, cluster_id, cl_bridge_indices)
+            - 'num_pairs': Total number of cation-cation pairs analyzed
             - 'sharing_counts': Dict with counts {'face': int, 'edge': int, 'corner': int, 'none': int}
             - 'sharing_fractions': Dict with fractions {'face': float, 'edge': float, 'corner': float, 'none': float}
             - 'per_cluster': Dict keyed by cluster_id with same structure
@@ -1478,7 +1483,7 @@ def classify_pu_pu_sharing(
         >>> results = classify_pu_pu_sharing(G, species, cluster_ids)
     """
     if not NETWORKX_AVAILABLE:
-        raise ImportError("networkx is required for classify_pu_pu_sharing")
+        raise ImportError("networkx is required for classify_cation_cation_sharing")
     
     if len(species) != len(cluster_ids):
         raise ValueError(f"species length ({len(species)}) must match cluster_ids length ({len(cluster_ids)})")
@@ -1596,12 +1601,12 @@ def compute_sharing_statistics(
     sharing_results: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Format results from classify_pu_pu_sharing into summary statistics and per-cluster breakdowns.
+    Format results from classify_cation_cation_sharing into summary statistics and per-cluster breakdowns.
     
     This function implements Phase 5: Statistics formatting for sharing classification.
     
     Args:
-        sharing_results: Dictionary returned from classify_pu_pu_sharing
+        sharing_results: Dictionary returned from classify_cation_cation_sharing
     
     Returns:
         Dictionary with:
@@ -1647,7 +1652,7 @@ def compute_sharing_statistics(
     }
 
 
-def build_pu_pu_graph_with_bridges(
+def build_cation_cation_graph_with_bridges(
     graph: Any,
     species: np.ndarray,
     cluster_ids: np.ndarray,
@@ -1657,29 +1662,29 @@ def build_pu_pu_graph_with_bridges(
     sharing_results: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """
-    Build a Pu-Pu graph where edges represent Pu-Pu pairs connected via shared Cl atoms,
+    Build a cation-cation graph where edges represent cation-cation pairs connected via shared Cl atoms,
     with edge weights equal to the number of Cl bridges.
     
-    This function implements Phase 5: Pu-Pu graph construction with bridge information.
+    This function implements Phase 5: cation-cation graph construction with bridge information.
     
     To avoid duplicate computation, this function can accept pre-computed sharing_results
-    from classify_pu_pu_sharing(). If not provided, it will compute them internally.
+    from classify_cation_cation_sharing(). If not provided, it will compute them internally.
     
     Args:
         graph: networkx Graph from build_shared_anion_graph_from_voronoi 
-               (contains Pu and Cl nodes, Pu-Cl edges only)
-        species: (N,) array of species names to identify Pu atoms
+               (contains cation and Cl nodes, cation-Cl edges only)
+        species: (N,) array of species names to identify cation atoms
         cluster_ids: (N,) array of cluster IDs (required - analysis is cluster-based)
         positions: (N, 3) array of atom positions (for node attributes)
         cation: Species to use as cation (default: 'Pu')
         anion: Species to use as anion (default: 'Cl')
-        sharing_results: Optional pre-computed results from classify_pu_pu_sharing()
+        sharing_results: Optional pre-computed results from classify_cation_cation_sharing()
                         to avoid duplicate iteration. If None, will compute internally.
     
     Returns:
         networkx Graph with:
-            - Nodes: All Pu atoms (with attributes: position, species, index, cluster_id)
-            - Edges: Pu-Pu pairs connected via shared Cl atoms (with attributes: 
+            - Nodes: All cation atoms (with attributes: position, species, index, cluster_id)
+            - Edges: cation-cation pairs connected via shared Cl atoms (with attributes: 
                      weight, num_cl_bridges, cl_bridge_indices, sharing_type, cluster_id)
     
     Raises:
@@ -1695,7 +1700,7 @@ def build_pu_pu_graph_with_bridges(
         >>> G_pu_pu = build_pu_pu_graph_with_bridges(G_pu_cl, species, cluster_ids, positions)
     """
     if not NETWORKX_AVAILABLE:
-        raise ImportError("networkx is required for build_pu_pu_graph_with_bridges")
+        raise ImportError("networkx is required for build_cation_cation_graph_with_bridges")
     
     if len(species) != len(cluster_ids):
         raise ValueError(f"species length ({len(species)}) must match cluster_ids length ({len(cluster_ids)})")
@@ -1704,7 +1709,7 @@ def build_pu_pu_graph_with_bridges(
     
     # If sharing_results not provided, compute them (but this will iterate again)
     if sharing_results is None:
-        sharing_results = classify_pu_pu_sharing(
+        sharing_results = classify_cation_cation_sharing(
             graph=graph,
             species=species,
             cluster_ids=cluster_ids,
@@ -1742,7 +1747,7 @@ def build_pu_pu_graph_with_bridges(
     
     # Add edges from pre-computed pairs (only for pairs with bridges)
     # This uses the already-computed sharing_results, avoiding duplicate iteration
-    for cluster_id in tqdm(unique_cluster_ids, desc="Adding Pu-Pu edges"):
+    for cluster_id in tqdm(unique_cluster_ids, desc=f"Adding {cation}-{cation} edges"):
         cluster_data = sharing_results['per_cluster'][cluster_id]
         
         for pair in cluster_data['pairs']:

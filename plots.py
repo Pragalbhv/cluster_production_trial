@@ -1,5 +1,5 @@
 """
-Plotting utilities for Voronoi-based Pu-Cl cluster analysis.
+Plotting utilities for Voronoi-based cation-Cl cluster analysis.
 
 This module provides plotting utilities inspired by cluster_analysis/utils/plots.py.
 Functions are implemented locally for Phase 1 scope.
@@ -94,18 +94,20 @@ def get_standard_colors() -> Dict:
 
 def plot_coordination_histograms(
     histograms_dict: Dict[str, Any],
+    cation: str,
     ax: Any = None,
     title: str = 'Coordination Histograms',
     show_statistics: bool = True,
 ) -> Any:
     """
-    Plot side-by-side histograms for Pu-Cl, Pu-Na, Pu-Pu, and Pu-Any coordination.
+    Plot side-by-side histograms for cation-Cl, cation-Na, cation-cation, and cation-Any coordination.
     
     This function implements Phase 3 plotting: Plot coordination histograms with statistics.
     
     Args:
         histograms_dict: Dictionary with keys 'pu_cl', 'pu_na', 'pu_pu', 'pu_any'
             Each value should be a dict with 'counts', 'bin_edges', and optionally 'values'
+        cation: Cation species name (e.g., 'Pu', 'Ce') - required for labeling
         ax: Optional matplotlib axes object (if None, creates new figure)
         title: Plot title (default: 'Coordination Histograms')
         show_statistics: Whether to display mean ± std dev and median (default: True)
@@ -163,35 +165,35 @@ def plot_coordination_histograms(
         
         if len(pu_cl_data.get('counts', [])) > 0:
             ax.bar(bin_centers - 1.5*width, pu_cl_data['counts'], width, 
-                   label='Pu-Cl', color=COLORS['species']['Cl'], alpha=PLOT_CONFIG['alpha_main'])
+                   label=f'{cation}-Cl', color=COLORS['species']['Cl'], alpha=PLOT_CONFIG['alpha_main'])
             if show_statistics:
                 stats = get_stats(pu_cl_data, bin_centers)
                 if stats:
-                    stats_text.append(f"Pu-Cl: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
+                    stats_text.append(f"{cation}-Cl: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
         
         if len(pu_na_data.get('counts', [])) > 0:
             ax.bar(bin_centers - 0.5*width, pu_na_data['counts'], width,
-                   label='Pu-Na', color=COLORS['species']['Na'], alpha=PLOT_CONFIG['alpha_main'])
+                   label=f'{cation}-Na', color=COLORS['species']['Na'], alpha=PLOT_CONFIG['alpha_main'])
             if show_statistics:
                 stats = get_stats(pu_na_data, bin_centers)
                 if stats:
-                    stats_text.append(f"Pu-Na: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
+                    stats_text.append(f"{cation}-Na: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
         
         if len(pu_pu_data.get('counts', [])) > 0:
             ax.bar(bin_centers + 0.5*width, pu_pu_data['counts'], width,
-                   label='Pu-Pu', color=COLORS['species']['Pu'], alpha=PLOT_CONFIG['alpha_main'])
+                   label=f'{cation}-{cation}', color=COLORS['species'].get(cation, COLORS['coordination'][0]), alpha=PLOT_CONFIG['alpha_main'])
             if show_statistics:
                 stats = get_stats(pu_pu_data, bin_centers)
                 if stats:
-                    stats_text.append(f"Pu-Pu: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
+                    stats_text.append(f"{cation}-{cation}: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
         
         if len(pu_any_data.get('counts', [])) > 0:
             ax.bar(bin_centers + 1.5*width, pu_any_data['counts'], width,
-                   label='Pu-Any', color='gray', alpha=PLOT_CONFIG['alpha_main'] * 0.7)
+                   label=f'{cation}-Any', color='gray', alpha=PLOT_CONFIG['alpha_main'] * 0.7)
             if show_statistics:
                 stats = get_stats(pu_any_data, bin_centers)
                 if stats:
-                    stats_text.append(f"Pu-Any: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
+                    stats_text.append(f"{cation}-Any: Mean={stats['mean']:.2f}±{stats['std']:.2f}, Median={stats['median']:.2f}")
     
     # Add statistics text box
     if show_statistics and len(stats_text) > 0:
@@ -284,10 +286,11 @@ def plot_weighted_coordination_comparison(
     aligned_cn_y = np.array([cn_y_map[idx] for idx in sorted(common_indices)])
     
     # Create scatter plot
+    # Use coordination color as fallback instead of hardcoded 'Pu'
     ax.scatter(aligned_cn_x, aligned_cn_y, 
                alpha=PLOT_CONFIG['alpha_main'], 
                s=PLOT_CONFIG['marker_size']**2,
-               color=COLORS['species'].get('Pu', COLORS['coordination'][0]),
+               color=COLORS['coordination'][0],
                edgecolors='black', linewidth=0.5)
     
     # Add diagonal line for reference
@@ -454,7 +457,7 @@ def plot_3d_cluster_component(
     # Plot cation atoms
     if len(cation_positions) > 0:
         cation_positions = np.vstack(cation_positions)
-        cation_color = COLORS['species'].get(cation, COLORS['species']['Pu'])
+        cation_color = COLORS['species'].get(cation, COLORS['coordination'][0])
         ax.scatter(
             cation_positions[:, 0],
             cation_positions[:, 1],
@@ -694,7 +697,7 @@ def plot_unwrapped_3d_cluster_component(
     # Plot cation atoms with unwrapped positions
     if len(cation_positions) > 0:
         cation_positions = np.vstack(cation_positions)
-        cation_color = COLORS['species'].get(cation, COLORS['species']['Pu'])
+        cation_color = COLORS['species'].get(cation, COLORS['coordination'][0])
         ax.scatter(
             cation_positions[:, 0],
             cation_positions[:, 1],
